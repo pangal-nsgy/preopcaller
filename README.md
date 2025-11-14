@@ -37,6 +37,112 @@
    - Structured logging (e.g., pino/winston) and error reporting.
    - Metrics emitted to Supabase or a lightweight dashboard for call health.
 
+## How Everything Connects (Data Flow)
+
+### Why We Need a Web Server & Public URL
+
+**The Problem**: Your computer (localhost) isn't directly accessible from the internet. Twilio, as an external service, needs to send you real-time audio data and receive instructions during a call. We need a web server running locally that Twilio can reach.
+
+**The Solution**: Use a tunnel service (ngrok) that creates a temporary public URL pointing to your local server. Think of it like a phone number for your computer that Twilio can call.
+
+### Real-Time Call Flow
+
+```
+┌─────────────┐
+│   Operator  │  (You trigger a call via web UI)
+│   (Web UI)  │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│            Your Local Web Server                         │
+│  (Express/Next.js running on localhost:3000)            │
+│  Exposed via ngrok → https://abc123.ngrok.io            │
+└──────┬──────────────────────────────────────────────────┘
+       │
+       │ 1. Initiates call
+       ▼
+┌─────────────┐
+│   Twilio    │  (Receives call request, dials phone number)
+│   Voice API │
+└──────┬──────┘
+       │
+       │ 2. Call answered, starts Media Stream
+       │    (WebSocket connection to your server)
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│         Your Server Receives Audio Chunks                │
+│         (Real-time WebSocket stream)                     │
+└──────┬──────────────────────────────────────────────────┘
+       │
+       │ 3. Forward audio chunks
+       ▼
+┌─────────────┐
+│ ElevenLabs  │  (Converts speech → text)
+│     STT     │
+└──────┬──────┘
+       │
+       │ 4. Returns transcribed text
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│         Your Server Processes Text                       │
+│         (Adds to conversation context)                   │
+└──────┬──────────────────────────────────────────────────┘
+       │
+       │ 5. Send text + context
+       ▼
+┌─────────────┐
+│     LLM     │  (Generates response based on conversation)
+│  (Ollama/   │
+│   Mistral)  │
+└──────┬──────┘
+       │
+       │ 6. Returns response text
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│         Your Server Receives LLM Response                │
+│         (Text to be spoken)                              │
+└──────┬──────────────────────────────────────────────────┘
+       │
+       │ 7. Send text
+       ▼
+┌─────────────┐
+│ ElevenLabs  │  (Converts text → speech audio)
+│     TTS     │
+└──────┬──────┘
+       │
+       │ 8. Returns audio chunks
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│         Your Server Receives Audio                       │
+│         (Ready to send to caller)                        │
+└──────┬──────────────────────────────────────────────────┘
+       │
+       │ 9. Send audio back via WebSocket
+       ▼
+┌─────────────┐
+│   Twilio    │  (Plays audio to caller)
+│ Media Stream│
+└──────┬──────┘
+       │
+       │ 10. Caller hears AI response
+       ▼
+┌─────────────┐
+│   Caller    │  (Responds, cycle repeats)
+│   (Phone)   │
+└─────────────┘
+```
+
+### Key Points
+
+- **Web Server Required**: Twilio needs to send you data in real-time. A web server receives WebSocket connections and HTTP webhooks.
+- **Public URL Required (for local dev)**: ngrok creates a tunnel so Twilio can reach `localhost:3000` via `https://abc123.ngrok.io`.
+  - **Important**: The server runs locally on your machine, but ngrok provides a public URL that anyone (or any service) can access.
+  - During development: Use ngrok to expose your local server to the internet.
+  - For production: Deploy the server to a hosting service (Vercel, Render, etc.) and use that permanent URL instead.
+- **Real-Time Loop**: The entire cycle (audio → text → AI → text → audio) happens continuously during the call, creating a conversation.
+- **All Happens in Parallel**: While the caller is speaking, we're processing previous chunks and preparing responses.
+
 ## Milestones
 
 1. **Foundations**
@@ -60,7 +166,7 @@
 ## Technical Choices (Initial)
 
 - **Frontend**: Next.js 14, React 18, Tailwind or Chakra for rapid UI.
-- **Backend**: Next.js API routes or separate Fastify/Express service (decision pending prototype).
+- **Backend**: Express server with Node.js (chosen for simplicity and ease of Twilio/ngrok integration).
 - **AI Stack**: 
   - Use an open-source model served via Ollama or hosted inference (evaluate latency).
   - Prompt engineering to align tone and guardrails.
@@ -106,14 +212,14 @@
    1.5 Store credentials securely in `.env.local` and deployment secrets.
 
 2. **Project Scaffolding**
-   2.1 Initialize monorepo or Next.js app with API routes and frontend shell.  
-   2.2 Configure TypeScript, linting, formatting, and basic CI (optional).  
-   2.3 Set up basic auth guard (temporary shared secret or Supabase auth).
+   2.1 ✅ Initialize Express server with basic endpoints and ngrok integration.  
+   2.2 ⏳ Configure TypeScript, linting, formatting, and basic CI (optional).  
+   2.3 ⏳ Set up basic auth guard (temporary shared secret or Supabase auth).
 
 3. **Telephony MVP**
-   3.1 Build API endpoint to initiate outbound call via Twilio Programmable Voice.  
-   3.2 Implement Twilio webhook receiver for call status + media stream events.  
-   3.3 Test manual call flow with static TwiML response to validate connectivity.
+   3.1 ✅ Build API endpoint to initiate outbound call via Twilio Programmable Voice.  
+   3.2 ⏳ Implement Twilio webhook receiver for call status + media stream events.  
+   3.3 ⏳ Test manual call flow with static TwiML response to validate connectivity.
 
 4. **Voice ↔ Text Bridge**
    4.1 Stream audio from Twilio Media Streams to ElevenLabs STT; capture transcripts.  
@@ -157,7 +263,21 @@
   - Built `scripts/testCall.mjs` and successfully queued outbound test call (SID `CA169221b6da74a536f9cdf4bec11136f0`).
   - Added `.gitignore`, initialized npm project, and installed `dotenv` + `twilio`.
 
+- **Fri Nov 14 14:47:37 PST 2025**
+  - **Checkpoint 1**: Verified Twilio credentials loaded correctly from `.env.local`.
+  - **Checkpoint 2**: Confirmed environment variables load successfully via `scripts/checkEnv.mjs`.
+  - **Checkpoint 3**: Successfully tested Twilio outbound call functionality - call queued and completed.
+  - **Checkpoint 4**: Set up Express server and ngrok tunnel infrastructure.
+    - Created simple Express server (`scripts/simpleServer.mjs`) running on `localhost:3000`.
+    - Installed ngrok binary via Homebrew.
+    - Configured ngrok with auth token via `scripts/configNgrok.mjs`.
+    - Created `scripts/testNgrokSimple.mjs` to test server + ngrok integration.
+    - ✅ **Verified**: Public ngrok URL successfully forwards to local server - connectivity confirmed.
+    - Server runs locally but is accessible from the internet via ngrok public URL (required for Twilio webhooks).
+
 ## Issues & Resolutions
 
 - Initial `git push` failed with SSL certificate error; reran command with elevated permissions to allow access to system CA bundle.
 - `.env.local` reads failed under sandbox restrictions; reran scripts with `required_permissions=['all']` to grant read access.
+- ngrok npm package v5 beta had connection issues with local API; switched to using ngrok binary CLI directly via Homebrew installation, which resolved connectivity issues.
+- Initial ngrok integration was overly complex; simplified to basic Express server + ngrok CLI spawn for reliable tunnel creation.
