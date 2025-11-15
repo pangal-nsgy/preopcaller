@@ -6,7 +6,7 @@
 - **Primary Users**: Internal operators triggering outbound calls through a web UI; call recipients interacting with the automated agent.
 - **Success Criteria**: 
   - Reliable outbound calls through Twilio.
-  - Real-time speech ↔ text loop with ElevenLabs and an open-source LLM.
+  - Real-time speech ↔ text loop with Twilio's native transcription/TTS and an open-source LLM.
   - Durable storage of call metadata, transcripts, and optional audio in Supabase.
   - Observability hooks (logging/monitoring) for debugging live conversations.
 
@@ -19,7 +19,8 @@
 
 2. **Backend API**
    - Orchestrate Twilio call creation and webhook handling.
-   - Stream audio/text between Twilio, ElevenLabs, and the LLM loop.
+   - Receive real-time transcriptions from Twilio Media Streams.
+   - Process transcriptions through LLM and send responses via Twilio TTS.
    - Persist and fetch call records from Supabase.
    - Provide authentication/authorization (initially simple admin guard).
 
@@ -67,29 +68,23 @@
 │   Voice API │
 └──────┬──────┘
        │
-       │ 2. Call answered, starts Media Stream
-       │    (WebSocket connection to your server)
+       │ 2. Call answered, starts Media Stream + Transcription
+       │    (WebSocket connection + transcription webhooks)
        ▼
 ┌─────────────────────────────────────────────────────────┐
-│         Your Server Receives Audio Chunks                │
-│         (Real-time WebSocket stream)                     │
+│         Your Server Receives Transcriptions              │
+│         (Real-time transcription webhooks from Twilio)   │
 └──────┬──────────────────────────────────────────────────┘
        │
-       │ 3. Forward audio chunks
-       ▼
-┌─────────────┐
-│ ElevenLabs  │  (Converts speech → text)
-│     STT     │
-└──────┬──────┘
-       │
-       │ 4. Returns transcribed text
+       │ 3. Process transcribed text
+       │    (Add to conversation context)
        ▼
 ┌─────────────────────────────────────────────────────────┐
 │         Your Server Processes Text                       │
 │         (Adds to conversation context)                   │
 └──────┬──────────────────────────────────────────────────┘
        │
-       │ 5. Send text + context
+       │ 4. Send text + context
        ▼
 ┌─────────────┐
 │     LLM     │  (Generates response based on conversation)
@@ -97,35 +92,21 @@
 │   Mistral)  │
 └──────┬──────┘
        │
-       │ 6. Returns response text
+       │ 5. Returns response text
        ▼
 ┌─────────────────────────────────────────────────────────┐
 │         Your Server Receives LLM Response                │
 │         (Text to be spoken)                              │
 └──────┬──────────────────────────────────────────────────┘
        │
-       │ 7. Send text
+       │ 6. Send TwiML with <Say> verb
        ▼
 ┌─────────────┐
-│ ElevenLabs  │  (Converts text → speech audio)
-│     TTS     │
+│   Twilio    │  (Converts text → speech via TTS)
+│     TTS     │  (Plays audio directly to caller)
 └──────┬──────┘
        │
-       │ 8. Returns audio chunks
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│         Your Server Receives Audio                       │
-│         (Ready to send to caller)                        │
-└──────┬──────────────────────────────────────────────────┘
-       │
-       │ 9. Send audio back via WebSocket
-       ▼
-┌─────────────┐
-│   Twilio    │  (Plays audio to caller)
-│ Media Stream│
-└──────┬──────┘
-       │
-       │ 10. Caller hears AI response
+       │ 7. Caller hears AI response
        ▼
 ┌─────────────┐
 │   Caller    │  (Responds, cycle repeats)
@@ -150,9 +131,10 @@
    - Configure Supabase project, environment variables, and DB schema migrations.
 
 2. **Telephony Loop MVP**
-   - Implement Twilio outbound call flow with webhooks.
-   - Build audio ↔ text bridge: Twilio Media Streams → ElevenLabs STT/TTS.
-   - Integrate LLM response generation with conversation state.
+   - ✅ Implement Twilio outbound call flow with webhooks.
+   - ✅ Build audio ↔ text bridge: Twilio Media Streams → Twilio Real-Time Transcription.
+   - ✅ Integrate Twilio TTS for text-to-speech responses.
+   - ⏳ Integrate LLM response generation with conversation state.
 
 3. **Persistence & Review**
    - Store transcripts, call metadata, and audio snippets in Supabase.
@@ -170,8 +152,8 @@
 - **AI Stack**: 
   - Use an open-source model served via Ollama or hosted inference (evaluate latency).
   - Prompt engineering to align tone and guardrails.
-- **Speech Services**: ElevenLabs Realtime APIs for STT/TTS.
-- **Telephony**: Twilio Voice API + Media Streams.
+- **Speech Services**: Twilio's native Real-Time Transcription and TTS (via TwiML `<Say>` verb).
+- **Telephony**: Twilio Voice API + Media Streams + Real-Time Transcription.
 - **Database**: Supabase (PostgreSQL + storage buckets + auth).
 - **Deployment**: Vercel/Fly.io for frontend; Render/Fly.io/Heroku for backend if separated; Supabase managed hosting.
 
@@ -223,12 +205,14 @@
 
 4. **Voice ↔ Text Bridge**
    4.1 ✅ Stream audio from Twilio Media Streams - receiving real-time audio chunks via WebSocket.  
-   4.2 ✅ Send audio chunks to Whisper STT; capture transcripts (using OpenAI Whisper API).  
-   4.3 ✅ Convert text to speech using ElevenLabs TTS (generating MP3 audio).  
-   4.4 ⚠️  **BLOCKED**: Mu-law to WAV conversion producing poor quality - need to fix audio conversion.
-   4.5 ⏳ Convert TTS audio (MP3) back to mu-law format for Twilio Media Streams.
-   4.6 ⏳ Send TTS audio back to Twilio stream to complete conversation loop.
-   4.7 ⏳ Implement buffering/error handling for low-latency loop.
+   4.2 ✅ **RESOLVED**: Using Twilio's built-in real-time transcription instead of Whisper STT - eliminates mu-law conversion bottleneck.
+   4.3 ✅ **RESOLVED**: Using Twilio TTS via TwiML `<Say>` verb instead of ElevenLabs - eliminates MP3 to mu-law conversion.
+   4.4 ✅ **RESOLVED**: All audio conversion issues eliminated - Twilio handles both STT and TTS internally.
+   4.5 ✅ Receive real-time transcriptions via Twilio transcription webhooks.
+   4.6 ✅ Store and display final transcriptions when call ends.
+   4.7 ✅ Complete transcription flow: Twilio Real-Time Transcription → Webhook → Server → Display.
+   4.8 ⏳ Integrate LLM for generating intelligent responses (currently transcription working, LLM pending).
+   4.9 ⏳ Implement buffering/error handling for low-latency loop.
 
 5. **Conversation Engine**
    5.1 Wrap chosen LLM with prompt template and conversation memory store.  
@@ -310,6 +294,25 @@
       - Audio files saved for debugging - need to verify conversion algorithm or use FFmpeg/library.
     - **CURRENT BOTTLENECK**: TTS audio (MP3 from ElevenLabs) not yet converted back to mu-law for Twilio Media Streams.
 
+- **Sat Nov 15 [Current Date]**
+  - **Checkpoint 7**: Switched to Twilio's real-time transcription and TTS - eliminated all audio conversion bottlenecks.
+    - ✅ **RESOLVED**: Replaced Whisper STT with Twilio Media Streams real-time transcription.
+    - ✅ **RESOLVED**: Replaced ElevenLabs TTS with Twilio TTS via TwiML `<Say>` verb.
+    - Updated `serverWithMediaStreams.mjs` to use Twilio's `<Transcription>` TwiML noun with `statusCallbackUrl`.
+    - Removed dependency on Whisper STT and audio buffering code (no longer needed).
+    - Removed dependency on ElevenLabs TTS (no longer needed).
+    - Removed mu-law to WAV conversion code (Twilio handles transcription internally).
+    - Removed MP3 to mu-law conversion code (Twilio TTS handles audio internally).
+    - Configured TwiML with `<Transcription>` noun inside `<Start>` tag with `partialResults="true"`.
+    - Created `/webhook/transcription` endpoint to receive real-time transcription webhooks from Twilio.
+    - Transcription webhooks now received with `TranscriptionData` (JSON string) containing transcript and confidence.
+    - Added storage for final transcriptions by call SID.
+    - Added display of final transcriptions when call ends (status callback and stream stop events).
+    - ✅ **Benefits**: No audio conversion needed, simpler codebase, everything handled by Twilio, no external STT/TTS dependencies.
+    - ✅ **Verified**: Real-time transcriptions working - receiving webhooks with transcript data.
+    - ✅ **Verified**: Final transcriptions displayed when call ends with formatted output.
+    - ⏳ **Next**: Integrate LLM for generating intelligent responses (currently transcription working, LLM pending).
+
 ## Issues & Resolutions
 
 - Initial `git push` failed with SSL certificate error; reran command with elevated permissions to allow access to system CA bundle.
@@ -319,10 +322,12 @@
 - Old server process (`simpleServer.mjs`) was still running and handling requests instead of new Media Streams server; killed old processes to ensure correct server instance handles requests.
 - WebSocket URL needed to use `wss://` (not `ws://`) for ngrok HTTPS tunnels.
 - Twilio webhook endpoint needed GET handler in addition to POST (Twilio may send GET for verification/redirect).
-- **CURRENT ISSUE**: Mu-law to WAV audio conversion producing static/trash audio quality.
-  - Manual G.711 mu-law decoding algorithm may be incorrect.
-  - Audio files saved to `debug-audio/` for inspection.
-  - Potential solutions: Use FFmpeg for conversion, verify G.711 formula, or use tested mu-law library.
-  - Twilio Media Streams only supports mu-law format - conversion required.
-- Transcription quality poor - likely due to audio conversion issues rather than Whisper quality.
-- ElevenLabs Realtime API requires paid plan - using REST API for TTS instead (works but less efficient).
+- **RESOLVED**: All audio conversion issues eliminated by switching to Twilio's native transcription and TTS.
+  - No longer need to convert audio - Twilio handles both transcription and TTS internally.
+  - Removed Whisper STT dependency and audio buffering complexity.
+  - Removed ElevenLabs TTS dependency - using Twilio TTS via TwiML `<Say>` verb.
+  - Twilio Real-Time Transcription webhooks received via `/webhook/transcription` endpoint.
+  - Transcription data parsed from `TranscriptionData` JSON string (contains transcript and confidence).
+  - Final transcriptions stored and displayed when call ends.
+  - Complete transcription flow now works: Twilio Real-Time Transcription → Webhook → Server → Display.
+- **CURRENT STATUS**: Transcription fully functional. Next step: Integrate LLM for generating intelligent responses.
