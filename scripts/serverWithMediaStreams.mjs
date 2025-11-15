@@ -3,6 +3,8 @@ import http from 'http';
 import { WebSocketServer } from 'ws';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { textToSpeech } from './elevenlabsClient.mjs';
+import { AudioBuffer } from './whisperSTT.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -102,11 +104,11 @@ app.post('/webhook/voice', (req, res) => {
   console.log('');
 
   // TwiML with Media Streams enabled
-  // Keep the call active so we can receive audio chunks
+  // Request PCM format instead of mu-law for simpler processing
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Start>
-    <Stream url="${streamUrl}" />
+    <Stream url="${streamUrl}" track="inbound_track" />
   </Start>
   <Say voice="alice">Hello! Media Streams are now active. I can hear what you say in real time.</Say>
   <Pause length="30"/>
@@ -144,24 +146,93 @@ wss.on('connection', (ws, req) => {
         console.log('  From:', message.start.from);
         console.log('  To:', message.start.to);
         console.log('  Direction:', message.start.track);
+        
+        // Initialize Whisper audio buffer for STT with smart buffering
+        const audioBuffer = new AudioBuffer(
+          // onTranscript callback - when Whisper converts speech to text
+          async (text, isFinal) => {
+            console.log(`  📝 Transcript: "${text}"`);
+            
+            // TODO: Send to LLM for response generation
+            // For now, just echo back what was said
+            if (isFinal && text.trim()) {
+              console.log(`  🤖 Generating response for: "${text}"`);
+              // TODO: Call LLM here
+              // const llmResponse = await callLLM(text);
+              
+              // For testing: just echo back
+              const responseText = `You said: ${text}`;
+              
+              // Convert response text to speech using ElevenLabs TTS
+              try {
+                console.log(`  🎙️  Converting to speech: "${responseText}"`);
+                const audioData = await textToSpeech(responseText);
+                
+                // Send audio back to Twilio Media Stream
+                // Note: Need to convert MP3 to mu-law - for now just log
+                console.log(`  ✅ Generated TTS audio: ${audioData.byteLength} bytes`);
+                // TODO: Convert MP3 to mu-law and send via WebSocket
+                // For now, we'll add this conversion next
+              } catch (error) {
+                console.error(`  ❌ TTS error:`, error.message);
+              }
+            }
+          },
+          {
+            minBufferDurationMs: 5000, // Wait for at least 5 seconds of audio
+            maxBufferDurationMs: 15000, // Max 15 seconds before forcing transcription
+            pauseDurationMs: 1500, // Wait 1.5s pause before transcribing (end of sentence)
+            energyThreshold: 1000, // Minimum energy to consider as speech
+          }
+        );
+        
+        // Store audio buffer with the call
+        mediaStreams.set(`audioBuffer_${callSid}`, audioBuffer);
+        
+        // Periodic transcription check (check every 500ms for better pause detection)
+        const transcriptionInterval = setInterval(() => {
+          audioBuffer.checkAndTranscribe().catch(console.error);
+        }, 500);
+        
+        mediaStreams.set(`interval_${callSid}`, transcriptionInterval);
       }
       
       if (message.event === 'media') {
         audioChunkCount++;
         
-        // Log first chunk and then every 20 chunks (about 1 second at 50ms intervals)
-        if (audioChunkCount === 1 || audioChunkCount % 20 === 0) {
-          console.log(`  🎤 Audio chunk #${audioChunkCount} received (${message.media.timestamp}ms) - ${message.media.payload.length} bytes`);
-          console.log(`     This means you're speaking! 🗣️`);
+        // Log less frequently (every 100 chunks = ~5 seconds)
+        if (audioChunkCount === 1 || audioChunkCount % 100 === 0) {
+          const buffer = mediaStreams.get(`audioBuffer_${callSid}`);
+          const bufferDuration = buffer ? 
+            buffer.buffer.reduce((sum, chunk) => sum + Buffer.from(chunk, 'base64').length, 0) / 8000 : 
+            0;
+          console.log(`  🎤 Received chunk #${audioChunkCount} (buffered: ${bufferDuration.toFixed(1)}s)`);
         }
         
-        // TODO: Send audio to ElevenLabs STT
-        // For now, we're just receiving and logging
+        // Buffer audio for Whisper STT
+        const audioBuffer = mediaStreams.get(`audioBuffer_${callSid}`);
+        if (audioBuffer && message.media.payload) {
+          audioBuffer.addChunk(message.media.payload);
+        }
       }
       
       if (message.event === 'stop') {
         console.log('  🛑 Media Stream stopped');
         if (callSid) {
+          // Flush any remaining audio for transcription
+          const audioBuffer = mediaStreams.get(`audioBuffer_${callSid}`);
+          if (audioBuffer) {
+            audioBuffer.flush().catch(console.error);
+            mediaStreams.delete(`audioBuffer_${callSid}`);
+          }
+          
+          // Clear transcription interval
+          const interval = mediaStreams.get(`interval_${callSid}`);
+          if (interval) {
+            clearInterval(interval);
+            mediaStreams.delete(`interval_${callSid}`);
+          }
+          
           mediaStreams.delete(callSid);
         }
       }

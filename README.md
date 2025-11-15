@@ -223,9 +223,12 @@
 
 4. **Voice ↔ Text Bridge**
    4.1 ✅ Stream audio from Twilio Media Streams - receiving real-time audio chunks via WebSocket.  
-   4.2 ⏳ Send audio chunks to ElevenLabs STT; capture transcripts.  
-   4.3 ⏳ Convert AI replies to speech using ElevenLabs TTS; return audio to Twilio stream.  
-   4.4 ⏳ Implement buffering/error handling for low-latency loop.
+   4.2 ✅ Send audio chunks to Whisper STT; capture transcripts (using OpenAI Whisper API).  
+   4.3 ✅ Convert text to speech using ElevenLabs TTS (generating MP3 audio).  
+   4.4 ⚠️  **BLOCKED**: Mu-law to WAV conversion producing poor quality - need to fix audio conversion.
+   4.5 ⏳ Convert TTS audio (MP3) back to mu-law format for Twilio Media Streams.
+   4.6 ⏳ Send TTS audio back to Twilio stream to complete conversation loop.
+   4.7 ⏳ Implement buffering/error handling for low-latency loop.
 
 5. **Conversation Engine**
    5.1 Wrap chosen LLM with prompt template and conversation memory store.  
@@ -289,6 +292,24 @@
     - Audio chunks logged to console every ~1 second during active speech.
     - Next step: Send audio chunks to ElevenLabs STT for speech-to-text conversion.
 
+- **Sat Nov 15 10:05:15 PST 2025**
+  - **Checkpoint 6**: Integrated Whisper STT and ElevenLabs TTS.
+    - Installed OpenAI SDK for Whisper API integration.
+    - Installed `@elevenlabs/elevenlabs-js` for TTS.
+    - Created `scripts/whisperSTT.mjs` - Whisper STT integration with mu-law to WAV conversion.
+    - Created `scripts/elevenlabsClient.mjs` - ElevenLabs TTS REST API client.
+    - Implemented smart audio buffering with Voice Activity Detection (VAD) and pause detection.
+    - Audio buffering strategy: 5-15 second buffers, transcribe on 1.5s pauses (sentence boundaries).
+    - ✅ **Verified**: Whisper STT working - receiving transcripts from audio chunks.
+    - ✅ **Verified**: ElevenLabs TTS working - generating audio from text responses.
+    - ✅ **Verified**: Full loop: Audio → Whisper → Text → Echo → ElevenLabs TTS → Audio (TTS audio not yet sent back to Twilio).
+    - Added audio file debugging - saves mu-law and WAV files to `debug-audio/` folder.
+    - Created test scripts: `testElevenLabs.mjs`, `testWhisper.mjs`, `testMulawConversion.mjs`.
+    - **CURRENT BOTTLENECK**: Mu-law to WAV audio conversion producing poor quality audio (static/noise).
+      - Manual G.711 mu-law decoding implementation appears incorrect.
+      - Audio files saved for debugging - need to verify conversion algorithm or use FFmpeg/library.
+    - **CURRENT BOTTLENECK**: TTS audio (MP3 from ElevenLabs) not yet converted back to mu-law for Twilio Media Streams.
+
 ## Issues & Resolutions
 
 - Initial `git push` failed with SSL certificate error; reran command with elevated permissions to allow access to system CA bundle.
@@ -298,3 +319,10 @@
 - Old server process (`simpleServer.mjs`) was still running and handling requests instead of new Media Streams server; killed old processes to ensure correct server instance handles requests.
 - WebSocket URL needed to use `wss://` (not `ws://`) for ngrok HTTPS tunnels.
 - Twilio webhook endpoint needed GET handler in addition to POST (Twilio may send GET for verification/redirect).
+- **CURRENT ISSUE**: Mu-law to WAV audio conversion producing static/trash audio quality.
+  - Manual G.711 mu-law decoding algorithm may be incorrect.
+  - Audio files saved to `debug-audio/` for inspection.
+  - Potential solutions: Use FFmpeg for conversion, verify G.711 formula, or use tested mu-law library.
+  - Twilio Media Streams only supports mu-law format - conversion required.
+- Transcription quality poor - likely due to audio conversion issues rather than Whisper quality.
+- ElevenLabs Realtime API requires paid plan - using REST API for TTS instead (works but less efficient).

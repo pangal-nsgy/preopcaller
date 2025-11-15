@@ -10,15 +10,22 @@
     "dev": "node scripts/startWithNgrok.mjs",
     "test-ngrok": "node scripts/testNgrokSimple.mjs",
     "test-flow": "node scripts/testFullFlow.mjs",
-    "test-flow-sim": "node scripts/testFullFlowTestCreds.mjs"
+    "test-flow-sim": "node scripts/testFullFlowTestCreds.mjs",
+    "test-elevenlabs": "node scripts/testElevenLabs.mjs",
+    "test-whisper": "node scripts/testWhisper.mjs",
+    "test-whisper-file": "node scripts/testWhisperWithFile.mjs",
+    "test-mulaw": "node scripts/testMulawConversion.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@elevenlabs/elevenlabs-js": "^2.24.1",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
+    "openai": "^6.9.0",
     "twilio": "^5.10.5",
+    "twilio-media-stream-capture": "^1.0.2",
     "ws": "^8.18.3"
   },
   "devDependencies": {
