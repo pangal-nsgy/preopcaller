@@ -218,13 +218,14 @@
 
 3. **Telephony MVP**
    3.1 ✅ Build API endpoint to initiate outbound call via Twilio Programmable Voice.  
-   3.2 ⏳ Implement Twilio webhook receiver for call status + media stream events.  
-   3.3 ⏳ Test manual call flow with static TwiML response to validate connectivity.
+   3.2 ✅ Implement Twilio webhook receiver for call status + media stream events.  
+   3.3 ✅ Test manual call flow with static TwiML response to validate connectivity.
 
 4. **Voice ↔ Text Bridge**
-   4.1 Stream audio from Twilio Media Streams to ElevenLabs STT; capture transcripts.  
-   4.2 Convert AI replies to speech using ElevenLabs TTS; return audio to Twilio stream.  
-   4.3 Implement buffering/error handling for low-latency loop.
+   4.1 ✅ Stream audio from Twilio Media Streams - receiving real-time audio chunks via WebSocket.  
+   4.2 ⏳ Send audio chunks to ElevenLabs STT; capture transcripts.  
+   4.3 ⏳ Convert AI replies to speech using ElevenLabs TTS; return audio to Twilio stream.  
+   4.4 ⏳ Implement buffering/error handling for low-latency loop.
 
 5. **Conversation Engine**
    5.1 Wrap chosen LLM with prompt template and conversation memory store.  
@@ -275,9 +276,25 @@
     - ✅ **Verified**: Public ngrok URL successfully forwards to local server - connectivity confirmed.
     - Server runs locally but is accessible from the internet via ngrok public URL (required for Twilio webhooks).
 
+- **Fri Nov 14 16:16:26 PST 2025**
+  - **Checkpoint 5**: Implemented Twilio webhook receiver and Media Streams support.
+    - Created `scripts/serverWithMediaStreams.mjs` with WebSocket server for real-time audio streaming.
+    - Added webhook endpoints: `/webhook/status` (call status updates) and `/webhook/voice` (TwiML instructions).
+    - Installed `ws` package for WebSocket support.
+    - Implemented Media Streams connection handling - receives real-time audio chunks from Twilio during calls.
+    - Created `scripts/testFullFlow.mjs` - automated script that starts server, ngrok, and initiates call with webhooks.
+    - ✅ **Verified**: Twilio webhooks successfully reaching server via ngrok tunnel.
+    - ✅ **Verified**: Media Stream WebSocket connection opens when call starts.
+    - ✅ **Verified**: Real-time audio chunks being received from caller (base64-encoded mu-law format, ~50ms intervals).
+    - Audio chunks logged to console every ~1 second during active speech.
+    - Next step: Send audio chunks to ElevenLabs STT for speech-to-text conversion.
+
 ## Issues & Resolutions
 
 - Initial `git push` failed with SSL certificate error; reran command with elevated permissions to allow access to system CA bundle.
 - `.env.local` reads failed under sandbox restrictions; reran scripts with `required_permissions=['all']` to grant read access.
 - ngrok npm package v5 beta had connection issues with local API; switched to using ngrok binary CLI directly via Homebrew installation, which resolved connectivity issues.
 - Initial ngrok integration was overly complex; simplified to basic Express server + ngrok CLI spawn for reliable tunnel creation.
+- Old server process (`simpleServer.mjs`) was still running and handling requests instead of new Media Streams server; killed old processes to ensure correct server instance handles requests.
+- WebSocket URL needed to use `wss://` (not `ws://`) for ngrok HTTPS tunnels.
+- Twilio webhook endpoint needed GET handler in addition to POST (Twilio may send GET for verification/redirect).
